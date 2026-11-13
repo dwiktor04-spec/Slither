@@ -66,6 +66,8 @@
       const SEGMENT_SPACING = 13;
       const FOOD_COUNT = 190;
       const BOSS_MAX_HEALTH = 5;
+      const bossFace = new Image();
+      bossFace.src = 'boss.png';
       let width, height, dpr, lastTime = 0, running = false, score = 0;
       let pointer = { x: 0, y: 0, active: false, boost: false }, boostKey = false, boosting = false;
       let snake, foods, camera, particles = [], boss, snakeColor = '#46e0a0';
@@ -135,7 +137,6 @@
         if (consumed !== -1) {
           const food = foods.splice(consumed, 1)[0];
           score += food.value;
-          // Każda kulka dodaje kilka segmentów, więc ślimak rośnie wyraźnie szybciej.
           for (let i = 0; i < 3; i++) snake.points.push({ ...snake.points[snake.points.length - 1] });
           foods.push(randomFood());
           for (let i = 0; i < 7; i++) particles.push({ x: food.x, y: food.y, vx: (Math.random() - .5) * 90, vy: (Math.random() - .5) * 90, life: .45, color: food.color });
@@ -162,7 +163,6 @@
               bossHealthEl.style.width = `${Math.max(0, boss.health / BOSS_MAX_HEALTH * 100)}%`;
               if (boss.health <= 0) { boss.alive = false; score += 250; }
             } else {
-              // Bez przyspieszenia dotknięcie bossa jest niebezpieczne.
               return endGame();
             }
           }
@@ -192,7 +192,32 @@
       function drawBoss() {
         if (!boss?.alive) return;
         const pulse = 1 + Math.sin(performance.now() / 180) * .06;
-        ctx.save(); ctx.translate(boss.x, boss.y); ctx.rotate(boss.angle);
+        ctx.save();
+        ctx.translate(boss.x, boss.y);
+        ctx.rotate(boss.angle);
+
+        const faceSize = 64 * pulse;
+        const hasFace = bossFace.complete && bossFace.naturalWidth > 0;
+
+        if (hasFace) {
+          ctx.beginPath();
+          ctx.arc(0, 0, faceSize * 0.52, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(bossFace, -faceSize / 2, -faceSize / 2, faceSize, faceSize);
+          ctx.restore();
+          ctx.save();
+          ctx.translate(boss.x, boss.y);
+          ctx.rotate(boss.angle);
+          ctx.strokeStyle = '#ffffff55';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(0, 0, faceSize * 0.52, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+          return;
+        }
+
         ctx.shadowBlur = 30; ctx.shadowColor = '#ff435e'; ctx.fillStyle = '#c92d4b';
         ctx.beginPath(); ctx.arc(0, 0, 34 * pulse, 0, Math.PI * 2); ctx.fill();
         ctx.shadowBlur = 0; ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 4;
