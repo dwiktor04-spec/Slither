@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#07111f" />
+  <title>Slither — arena</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; overflow: hidden; background: #07111f; color: #f4f8ff; }
+    canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+    .hud { position: fixed; z-index: 2; top: 20px; left: 20px; display: flex; gap: 12px; align-items: flex-start; pointer-events: none; }
+    .card { padding: 12px 16px; border: 1px solid #ffffff20; border-radius: 14px; background: #0b1725dc; box-shadow: 0 8px 30px #0005; backdrop-filter: blur(10px); }
+    .label { color: #9fb0c6; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    .value { margin-top: 3px; font-size: 22px; font-weight: 800; }
+    .help { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 15px; border: 1px solid #ffffff20; border-radius: 999px; background: #0b1725dd; color: #c7d4e5; font-size: 13px; text-align: center; pointer-events: none; white-space: nowrap; }
+    .help b { color: #fff; }
+    .overlay { position: fixed; z-index: 3; inset: 0; display: grid; place-items: center; padding: 20px; background: #0309149c; }
+    .panel { width: min(420px, 100%); padding: 30px; border: 1px solid #ffffff24; border-radius: 22px; background: #0b1725f5; box-shadow: 0 24px 80px #0008; text-align: center; }
+    .panel h1 { margin: 0 0 8px; font-size: 34px; }
+    .panel p { margin: 0 0 22px; color: #aab9cc; line-height: 1.6; }
+    button { border: 0; border-radius: 12px; padding: 13px 22px; background: #46e0a0; color: #062015; font: inherit; font-weight: 800; cursor: pointer; }
+    button:hover { background: #72efb8; }
+    [hidden] { display: none !important; }
+    @media (max-width: 520px) { .hud { top: 12px; left: 12px; gap: 8px; } .card { padding: 9px 12px; } .value { font-size: 18px; } .help { bottom: 12px; width: calc(100% - 24px); white-space: normal; font-size: 12px; } }
+  </style>
+</head>
+<body>
+  <canvas id="game" aria-label="Arena gry Slither"></canvas>
+  <div class="hud" aria-live="polite">
+    <div class="card"><div class="label">Wynik</div><div class="value" id="score">0</div></div>
+    <div class="card"><div class="label">Długość</div><div class="value" id="length">12</div></div>
+  </div>
+  <div class="help">Steruj myszką lub dotykiem · Przytrzymaj <b>klik</b> albo <b>Spację</b>, aby przyspieszyć</div>
+  <div class="overlay" id="start-screen">
+    <div class="panel"><h1>Slither</h1><p>Zbieraj świecące kulki, rośnij i uważaj, żeby nie uderzyć w siebie ani w krawędź areny.</p><button id="start-button">Zagraj</button></div>
+  </div>
+  <div class="overlay" id="game-over" hidden>
+    <div class="panel"><h1>Koniec gry!</h1><p>Twój wynik: <b id="final-score">0</b><br />Spróbujesz jeszcze raz?</p><button id="restart-button">Zagraj ponownie</button></div>
+  </div>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const scoreEl = document.getElementById('score');
+      const lengthEl = document.getElementById('length');
+      const startScreen = document.getElementById('start-screen');
+      const gameOverScreen = document.getElementById('game-over');
+      const WORLD = { width: 3200, height: 2400 };
+      const SEGMENT_SPACING = 13;
+      const FOOD_COUNT = 150;
+      let width, height, dpr, lastTime = 0, running = false, score = 0;
+      let pointer = { x: 0, y: 0, active: false }, boostKey = false, boosting = false;
+      let snake, foods, camera, particles = [];
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = window.innerWidth; height = window.innerHeight;
+        canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      function randomFood() {
+        const colors = ['#ffcf5a', '#ff6b8a', '#56d9ff', '#bd8bff', '#66f0a8'];
+        return { x: 35 + Math.random() * (WORLD.width - 70), y: 35 + Math.random() * (WORLD.height - 70), r: 4 + Math.random() * 3, color: colors[Math.floor(Math.random() * colors.length)], phase: Math.random() * Math.PI * 2 };
+      }
+      function newGame() {
+        score = 0;
+        const x = WORLD.width / 2, y = WORLD.height / 2;
+        snake = { points: Array.from({ length: 12 }, (_, i) => ({ x: x - i * SEGMENT_SPACING, y })), angle: 0, targetAngle: 0, alive: true };
+        foods = Array.from({ length: FOOD_COUNT }, randomFood);
+        particles = []; camera = { x, y };
+        scoreEl.textContent = '0'; lengthEl.textContent = snake.points.length;
+      }
+      function startGame() {
+        newGame(); running = true; lastTime = 0;
+        startScreen.hidden = true; gameOverScreen.hidden = true;
+        requestAnimationFrame(frame);
+      }
+      function endGame() {
+        running = false;
+        document.getElementById('final-score').textContent = score;
+        gameOverScreen.hidden = false;
+      }
+      function angleDiff(a, b) { return Math.atan2(Math.sin(b - a), Math.cos(b - a)); }
+      function update(dt) {
+        const head = snake.points[0];
+        const targetX = camera.x + pointer.x - width / 2;
+        const targetY = camera.y + pointer.y - height / 2;
+        if (pointer.active) snake.targetAngle = Math.atan2(targetY - head.y, targetX - head.x);
+        const turn = angleDiff(snake.angle, snake.targetAngle);
+        snake.angle += Math.max(-3.2 * dt, Math.min(3.2 * dt, turn));
+        const dx = Math.cos(snake.angle), dy = Math.sin(snake.angle);
+        boosting = (pointer.active && pointer.boost) || boostKey;
+        const speed = boosting && snake.points.length > 8 ? 250 : 175;
+        const next = { x: head.x + dx * speed * dt, y: head.y + dy * speed * dt };
+        if (next.x < 14 || next.y < 14 || next.x > WORLD.width - 14 || next.y > WORLD.height - 14) return endGame();
+        snake.points.unshift(next);
+        const consumed = foods.findIndex(food => Math.hypot(food.x - next.x, food.y - next.y) < food.r + 12);
+        if (consumed !== -1) {
+          const food = foods.splice(consumed, 1)[0]; score += 10; foods.push(randomFood());
+          for (let i = 0; i < 7; i++) particles.push({ x: food.x, y: food.y, vx: (Math.random() - .5) * 90, vy: (Math.random() - .5) * 90, life: .45, color: food.color });
+        } else snake.points.pop();
+        if (boosting && snake.points.length > 8 && Math.random() < dt * 5) { snake.points.pop(); score = Math.max(0, score - 1); }
+        for (let i = 12; i < snake.points.length; i += 2) {
+          if (Math.hypot(snake.points[i].x - next.x, snake.points[i].y - next.y) < 11) return endGame();
+        }
+        camera.x += (next.x - camera.x) * Math.min(1, dt * 5);
+        camera.y += (next.y - camera.y) * Math.min(1, dt * 5);
+        particles = particles.filter(p => p.life > 0);
+        for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+        scoreEl.textContent = score; lengthEl.textContent = snake.points.length;
+      }
+      function draw() {
+        ctx.clearRect(0, 0, width, height);
+        const left = camera.x - width / 2, top = camera.y - height / 2;
+        ctx.fillStyle = '#091523'; ctx.fillRect(0, 0, width, height);
+        ctx.save(); ctx.translate(-left, -top);
+        ctx.fillStyle = '#ffffff0a';
+        const grid = 50;
+        for (let x = Math.floor(Math.max(0, left) / grid) * grid; x < Math.min(WORLD.width, left + width); x += grid)
+          for (let y = Math.floor(Math.max(0, top) / grid) * grid; y < Math.min(WORLD.height, top + height); y += grid) { ctx.beginPath(); ctx.arc(x, y, 1.4, 0, Math.PI * 2); ctx.fill(); }
+        for (const food of foods) {
+          const pulse = 1 + Math.sin(performance.now() / 300 + food.phase) * .14;
+          ctx.shadowBlur = 14; ctx.shadowColor = food.color; ctx.fillStyle = food.color;
+          ctx.beginPath(); ctx.arc(food.x, food.y, food.r * pulse, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#ff718833'; ctx.lineWidth = 8; ctx.strokeRect(0, 0, WORLD.width, WORLD.height);
+        for (let i = snake.points.length - 1; i >= 0; i--) {
+          const p = snake.points[i]; const t = i / snake.points.length;
+          const radius = Math.max(4, 11 - t * 3);
+          ctx.fillStyle = i === 0 ? '#a4ffd0' : `hsl(${151 - t * 20} 75% ${48 - t * 6}%)`;
+          ctx.shadowBlur = i === 0 ? 18 : 5; ctx.shadowColor = '#46e0a0';
+          ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill();
+        }
+        const head = snake.points[0];
+        for (const side of [-1, 1]) {
+          const ex = head.x + Math.cos(snake.angle + side * .62) * 6 + Math.cos(snake.angle) * 4;
+          const ey = head.y + Math.sin(snake.angle + side * .62) * 6 + Math.sin(snake.angle) * 4;
+          ctx.fillStyle = '#f8ffff'; ctx.shadowBlur = 0; ctx.beginPath(); ctx.arc(ex, ey, 3.2, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#10242a'; ctx.beginPath(); ctx.arc(ex + Math.cos(snake.angle) * 1.5, ey + Math.sin(snake.angle) * 1.5, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+        for (const p of particles) { ctx.globalAlpha = Math.max(0, p.life / .45); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill(); }
+        ctx.globalAlpha = 1; ctx.restore();
+        if (boosting) { ctx.fillStyle = '#46e0a0'; ctx.font = '700 13px system-ui'; ctx.fillText('PRZYŚPIESZENIE', 20, height - 58); }
+      }
+      function frame(time) {
+        if (!running) return;
+        const dt = Math.min((time - (lastTime || time)) / 1000, .04); lastTime = time;
+        update(dt); if (running) { draw(); requestAnimationFrame(frame); }
+      }
+      function setPointer(x, y, boost = false) { pointer = { x, y, active: true, boost }; }
+      canvas.addEventListener('pointermove', e => setPointer(e.clientX, e.clientY, e.buttons > 0));
+      canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture?.(e.pointerId); setPointer(e.clientX, e.clientY, true); });
+      canvas.addEventListener('pointerup', e => { if (pointer.active) pointer.boost = false; });
+      window.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); boostKey = true; } });
+      window.addEventListener('keyup', e => { if (e.code === 'Space') boostKey = false; });
+      window.addEventListener('resize', resize);
+      document.getElementById('start-button').addEventListener('click', startGame);
+      document.getElementById('restart-button').addEventListener('click', startGame);
+      resize(); newGame(); draw();
+    })();
+  </script>
+</body>
+</html>
